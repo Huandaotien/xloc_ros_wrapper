@@ -200,6 +200,9 @@ void PubVisualizationThread(std::unique_ptr<xloc::XLOCInterface>& xloc, ros::Pub
 
 void PubMapThread(std::unique_ptr<xloc::XLOCInterface>& xloc, ros::Publisher& occupancy_pub)
 {
+    // Track last published header to avoid publishing unchanged maps
+    xloc::UnixTime last_published_time{0,0};
+    uint32_t last_published_seq = 0;
     while(ros::ok()){
         if(xloc){
             xloc::Diagnostics diag = xloc->GetDiagnostics();
@@ -207,14 +210,24 @@ void PubMapThread(std::unique_ptr<xloc::XLOCInterface>& xloc, ros::Publisher& oc
                 // publish online grid at 1 Hz
                 const xloc::OccupancyGrid& online = xloc->GetOnlineGridMap();
                 if(online.info.width > 0 && online.data.size() > 0) {
-                    occupancy_pub.publish(FromXlocOccupancyGrid(online));
+                    bool changed = (online.header.seq != last_published_seq) || (online.header.stamp != last_published_time);
+                    if(changed) {
+                        occupancy_pub.publish(FromXlocOccupancyGrid(online));
+                        last_published_seq = online.header.seq;
+                        last_published_time = online.header.stamp;
+                    }
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(1000));
             } else {
                 // publish static grid at 3 Hz
                 const xloc::OccupancyGrid& static_map = xloc->GetStaticGridMap(false);
                 if(static_map.info.width > 0 && static_map.data.size() > 0) {
-                    occupancy_pub.publish(FromXlocOccupancyGrid(static_map));
+                    bool changed = (static_map.header.seq != last_published_seq) || (static_map.header.stamp != last_published_time);
+                    if(changed) {
+                        occupancy_pub.publish(FromXlocOccupancyGrid(static_map));
+                        last_published_seq = static_map.header.seq;
+                        last_published_time = static_map.header.stamp;
+                    }
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(333));
             }
