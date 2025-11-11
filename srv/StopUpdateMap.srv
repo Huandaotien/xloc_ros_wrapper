@@ -1,0 +1,4 @@
+bool save_updated_map
+---
+uint8 code
+string message

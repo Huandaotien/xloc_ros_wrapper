@@ -1,0 +1,4 @@
+geometry_msgs/Pose new_map_origin
+---
+uint8 code
+string message

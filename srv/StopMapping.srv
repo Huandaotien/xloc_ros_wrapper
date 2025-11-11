@@ -1,0 +1,4 @@
+string map_file_name
+---
+uint8 code
+string message

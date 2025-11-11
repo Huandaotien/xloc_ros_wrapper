@@ -1,0 +1,5 @@
+<launch>
+    <node pkg="xloc_ros_wrapper" type="xloc_ros_node" name="xloc_ros_node" output="screen">
+        <param name="use_sim_time" value="false"/>
+    </node>
+</launch>

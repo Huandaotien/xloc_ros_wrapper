@@ -1,0 +1,6 @@
+string map_file_name
+bool use_initial_pose
+geometry_msgs/Pose initial_pose
+---
+uint8 code
+string message

@@ -1,0 +1,4 @@
+geometry_msgs/Pose initial_pose
+---
+uint8 code
+string message
