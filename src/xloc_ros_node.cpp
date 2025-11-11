@@ -114,12 +114,12 @@ void MainThread(std::unique_ptr<xloc::XLOCInterface>& xloc, std::shared_ptr<tf3:
                 diag_msg.reliability = diag.reliability;
                 diag_msg.matching_score = diag.matching_score;
                 diagnostics_pub.publish(diag_msg);
-                ROS_INFO_THROTTLE(3.0, "XLOC Diagnostics:\nstate:%d\nmessage:%s\nactive_map:%s\nreliability:%.3f\nmatching_score:%.3f",
-                    diag_msg.xloc_state,
-                    diag_msg.xloc_state_message.c_str(),
-                    diag_msg.current_active_map.c_str(),
-                    diag_msg.reliability,
-                    diag_msg.matching_score);
+                // ROS_INFO_THROTTLE(3.0, "XLOC Diagnostics:\nstate:%d\nmessage:%s\nactive_map:%s\nreliability:%.3f\nmatching_score:%.3f",
+                //     diag_msg.xloc_state,
+                //     diag_msg.xloc_state_message.c_str(),
+                //     diag_msg.current_active_map.c_str(),
+                //     diag_msg.reliability,
+                //     diag_msg.matching_score);
             } catch (const std::exception &e) {
                 ROS_WARN_THROTTLE(5.0, "Failed to get/publish diagnostics: %s", e.what());
             }
@@ -154,7 +154,7 @@ void MainThread(std::unique_ptr<xloc::XLOCInterface>& xloc, std::shared_ptr<tf3:
                 tf_broadcaster.sendTransform(stamped_transforms);
             }
             catch(const std::exception & ex){
-                ROS_WARN_THROTTLE(5.0, "TF lookup failed: %s", ex.what());
+                // ROS_WARN_THROTTLE(5.0, "TF lookup failed: %s", ex.what());
                 continue;
             }
         }
@@ -248,13 +248,13 @@ int main(int argc, char** argv)
     base_to_scan.header.frame_id = "base_link";
     base_to_scan.child_frame_id = "scan";
     base_to_scan.header.stamp = tf3::Time::now();
-    base_to_scan.transform.translation.x = 0.0;
-    base_to_scan.transform.translation.y = 0.0;
+    base_to_scan.transform.translation.x = -0.55;
+    base_to_scan.transform.translation.y = 0.17;
     base_to_scan.transform.translation.z = 0.0;
     base_to_scan.transform.rotation.x = 0.0;
     base_to_scan.transform.rotation.y = 0.0;
-    base_to_scan.transform.rotation.z = 0.0;
-    base_to_scan.transform.rotation.w = 1.0;
+    base_to_scan.transform.rotation.z = 1.0;
+    base_to_scan.transform.rotation.w = 0.0;
     tf_buffer->setTransform(base_to_scan, "xloc_ros_wrapper", true);
     tf3::TransformStampedMsg base_to_imu;
     base_to_imu.header.frame_id = "base_link";
@@ -263,10 +263,10 @@ int main(int argc, char** argv)
     base_to_imu.transform.translation.x = 0.0;
     base_to_imu.transform.translation.y = 0.0;
     base_to_imu.transform.translation.z = 0.0;
-    base_to_imu.transform.rotation.x = 0.0;
+    base_to_imu.transform.rotation.x = 1.0;
     base_to_imu.transform.rotation.y = 0.0;
     base_to_imu.transform.rotation.z = 0.0;
-    base_to_imu.transform.rotation.w = 1.0;
+    base_to_imu.transform.rotation.w = 0.0;
     tf_buffer->setTransform(base_to_imu, "xloc_ros_wrapper", true);
     std::unique_ptr<xloc::XLOCInterface> xloc = xloc::CreateXLOC(tf_buffer);
     if(!xloc){
@@ -289,7 +289,7 @@ int main(int argc, char** argv)
                 ls.range_max = msg->range_max;
                 ls.ranges.assign(msg->ranges.begin(), msg->ranges.end());
                 ls.intensities.assign(msg->intensities.begin(), msg->intensities.end());
-                xloc->DispatchSensorData("laser_scan", ls);
+                xloc->DispatchSensorData("scan", ls);
             }
         });
 
@@ -485,7 +485,7 @@ int main(int argc, char** argv)
     ros::Publisher traj_node_pub = nh.advertise<visualization_msgs::MarkerArray>("xloc/trajectory_nodes", 10);
     ros::Publisher constraint_pub = nh.advertise<visualization_msgs::MarkerArray>("xloc/constraints", 10);
     ros::Publisher diagnostics_pub = nh.advertise<xloc_ros_wrapper::Diagnostics>("xloc/diagnostics", 10);
-    ros::Publisher occupancy_pub = nh.advertise<nav_msgs::OccupancyGrid>("xloc/occupancy_grid", 10, true);
+    ros::Publisher occupancy_pub = nh.advertise<nav_msgs::OccupancyGrid>("/map", 10, true);
     // create broadcaster AFTER ros::init
     tf2_ros::TransformBroadcaster tf_broadcaster;
 
