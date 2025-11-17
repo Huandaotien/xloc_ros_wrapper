@@ -27,6 +27,8 @@
 #include <tf3/compat.h>
 #include <tf3/LinearMath/Transform.h>
 #include <any>
+#include <filesystem>
+#include <fstream>
 
 using namespace std::chrono_literals;
 
@@ -85,6 +87,28 @@ static visualization_msgs::MarkerArray FromXlocMarkerArray(const xloc::MarkerArr
         ros_marker.color.g = xloc_marker.color.g;
         ros_marker.color.b = xloc_marker.color.b;
         ros_marker.color.a = xloc_marker.color.a;
+        ros_marker.lifetime = ros::Duration(xloc_marker.lifetime.sec + xloc_marker.lifetime.nsec * 1e-9f);
+        ros_marker.frame_locked = xloc_marker.frame_locked;
+        for(const auto& pt : xloc_marker.points)
+        {
+            geometry_msgs::Point ros_pt;
+            ros_pt.x = pt.x;
+            ros_pt.y = pt.y;
+            ros_pt.z = pt.z;
+            ros_marker.points.push_back(ros_pt);
+        }
+        for(const auto& color : xloc_marker.colors)
+        {
+            std_msgs::ColorRGBA ros_color;
+            ros_color.r = color.r;
+            ros_color.g = color.g;
+            ros_color.b = color.b;
+            ros_color.a = color.a;
+            ros_marker.colors.push_back(ros_color);
+        }
+        ros_marker.text = xloc_marker.text;
+        ros_marker.mesh_resource = xloc_marker.mesh_resource;
+        ros_marker.mesh_use_embedded_materials = xloc_marker.mesh_use_embedded_materials;
         ros_ma.markers.push_back(ros_marker);
     }
     return ros_ma;
@@ -178,7 +202,10 @@ static nav_msgs::OccupancyGrid FromXlocOccupancyGrid(const xloc::OccupancyGrid& 
     out.info.origin.orientation.z = xg.info.origin.orientation.z;
     out.info.origin.orientation.w = xg.info.origin.orientation.w;
     // copy data (xloc uses int8_t vector)
-    out.data.assign(xg.data.begin(), xg.data.end());
+    out.data.resize(xg.data.size());
+    for (size_t i = 0; i < xg.data.size(); ++i) {
+        out.data[i] = static_cast<int8_t>(xg.data[i]);
+    }
     return out;
 }
 
@@ -224,6 +251,7 @@ void PubMapThread(std::unique_ptr<xloc::XLOCInterface>& xloc, ros::Publisher& oc
                 if(static_map.info.width > 0 && static_map.data.size() > 0) {
                     bool changed = (static_map.header.seq != last_published_seq) || (static_map.header.stamp != last_published_time);
                     if(changed) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(100)); // simulate processing delay
                         occupancy_pub.publish(FromXlocOccupancyGrid(static_map));
                         last_published_seq = static_map.header.seq;
                         last_published_time = static_map.header.stamp;
