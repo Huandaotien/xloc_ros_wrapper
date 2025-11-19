@@ -6,6 +6,7 @@
 #include "tf2_ros/transform_broadcaster.h"
 #include <visualization_msgs/MarkerArray.h>
 #include <nav_msgs/OccupancyGrid.h>
+#include <geometry_msgs/PoseWithCovarianceStamped.h>
 
 #include <xloc/xloc_interface.h>
 #include <xloc/xloc_common.h>
@@ -389,6 +390,17 @@ int main(int argc, char** argv)
                 imu.linear_acceleration_covariance[7] = msg->linear_acceleration_covariance[7];
                 imu.linear_acceleration_covariance[8] = msg->linear_acceleration_covariance[8];
                 xloc->DispatchSensorData("imu", imu);
+            }
+        });
+
+    ros::Subscriber initial_pose_sub = nh.subscribe<geometry_msgs::PoseWithCovarianceStamped>("initialpose", 10,
+        [&](const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg){
+            if(xloc){
+                xloc::Pose xp = ToXlocPose(msg->pose.pose);
+                xloc::StatusResponse s = xloc->SetInitialPose(xp);
+                if(s.code != xloc::OK){
+                    ROS_WARN("Failed to set initial pose from /initialpose: %s", s.message.c_str());
+                }
             }
         });
 
