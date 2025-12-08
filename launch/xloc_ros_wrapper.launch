@@ -3,7 +3,7 @@
           type="xloc_ros_node"
           name="xloc_ros_node"
           output="screen"
-          launch-prefix="gdb -ex 'set pagination off' -ex 'set logging file /tmp/backtrace.log' -ex 'set logging on' -ex run -ex 'bt' -ex 'set logging off' -ex quit --args">
+    >
         <param name="use_sim_time" value="false"/>
     </node>
 </launch>

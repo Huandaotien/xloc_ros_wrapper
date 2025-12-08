@@ -120,7 +120,7 @@ std::thread pub_visualization_thread;
 std::thread pub_map_thread;
 
 void MainThread(std::unique_ptr<xloc::XLOCInterface>& xloc, std::shared_ptr<tf3::BufferCore> tf_buffer,
-                   tf2_ros::TransformBroadcaster & tf_broadcaster, ros::Publisher & diagnostics_pub)
+                   tf2_ros::TransformBroadcaster & tf_broadcaster, ros::Publisher & diagnostics_pub, ros::Publisher & pose_pub)
 {
     xloc::Diagnostics diag;
     ros::Rate rate(10.0); // 10 Hz
@@ -145,6 +145,10 @@ void MainThread(std::unique_ptr<xloc::XLOCInterface>& xloc, std::shared_ptr<tf3:
                 //     diag_msg.current_active_map.c_str(),
                 //     diag_msg.reliability,
                 //     diag_msg.matching_score);
+                xloc::PoseStamped current_pose = xloc->GetCurrentPose();
+                geometry_msgs::PoseStamped pose_msg = FromXlocPoseStamped(current_pose);
+                // publish current pose
+                pose_pub.publish(pose_msg);
             } catch (const std::exception &e) {
                 ROS_WARN_THROTTLE(5.0, "Failed to get/publish diagnostics: %s", e.what());
             }
@@ -533,11 +537,13 @@ int main(int argc, char** argv)
     ros::Publisher constraint_pub = nh.advertise<visualization_msgs::MarkerArray>("xloc/constraints", 10);
     ros::Publisher diagnostics_pub = nh.advertise<xloc_ros_wrapper::Diagnostics>("xloc/diagnostics", 10);
     ros::Publisher occupancy_pub = nh.advertise<nav_msgs::OccupancyGrid>("/map", 10, true);
+    ros::Publisher pose_pub = nh.advertise<geometry_msgs::PoseStamped>("xloc/current_pose", 10);
     // create broadcaster AFTER ros::init
     tf2_ros::TransformBroadcaster tf_broadcaster;
 
     // Start processing thread (pass broadcaster by reference)
-    main_thread = std::thread(MainThread, std::ref(xloc), tf_buffer, std::ref(tf_broadcaster), std::ref(diagnostics_pub));
+    main_thread = std::thread(MainThread,
+        std::ref(xloc), tf_buffer, std::ref(tf_broadcaster), std::ref(diagnostics_pub), std::ref(pose_pub));
     pub_visualization_thread = std::thread(PubVisualizationThread, std::ref(xloc), std::ref(traj_node_pub), std::ref(constraint_pub));
     pub_map_thread = std::thread(PubMapThread, std::ref(xloc), std::ref(occupancy_pub));
     ROS_INFO("xloc_ros_node ready");
