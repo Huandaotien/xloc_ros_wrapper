@@ -49,11 +49,12 @@ catkin_package(
 include_directories(
   ${catkin_INCLUDE_DIRS}
   ${CMAKE_CURRENT_SOURCE_DIR}/include
-  ${CMAKE_CURRENT_SOURCE_DIR}/../../xloc_cpp/include
   # installed headers from xloc (if you ran make install)
   ${CMAKE_CURRENT_SOURCE_DIR}/../xloc_install/include
   /usr/local/include
   /usr/local/include/xloc
+  /usr/include
+  /usr/include/xloc
 )
 
 # Eigen include (for xloc headers)
