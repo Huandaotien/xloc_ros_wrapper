@@ -277,25 +277,37 @@ int main(int argc, char** argv)
 
     // Create TF buffer core and XLOC instance
     std::shared_ptr<::tf3::BufferCore> tf_buffer = std::make_shared<::tf3::BufferCore>(tf3::Duration(10.0));
-    tf3::TransformStampedMsg base_to_scan;
-    base_to_scan.header.frame_id = "base_link";
-    base_to_scan.child_frame_id = "scan";
-    base_to_scan.header.stamp = tf3::Time::now();
-    // base_to_scan.transform.translation.x = -0.55;
-    // base_to_scan.transform.translation.y = 0.17;
-    // base_to_scan.transform.translation.z = 0.0;
-    // base_to_scan.transform.rotation.x = 0.0;
-    // base_to_scan.transform.rotation.y = 0.0;
-    // base_to_scan.transform.rotation.z = 1.0;
-    // base_to_scan.transform.rotation.w = 0.0;
-    base_to_scan.transform.translation.x = 0.3;
-    base_to_scan.transform.translation.y = 0.0;
-    base_to_scan.transform.translation.z = 0.0;
-    base_to_scan.transform.rotation.x = 0.0;
-    base_to_scan.transform.rotation.y = 0.0;
-    base_to_scan.transform.rotation.z = 0.0;
-    base_to_scan.transform.rotation.w = 1.0;
-    tf_buffer->setTransform(base_to_scan, "xloc_ros_wrapper", true);
+    tf3::TransformStampedMsg base_to_scan_1;
+    base_to_scan_1.header.frame_id = "base_link";
+    base_to_scan_1.child_frame_id = "scan_1";
+    base_to_scan_1.header.stamp = tf3::Time::now();
+    // base_to_scan_1.transform.translation.x = -0.55;
+    // base_to_scan_1.transform.translation.y = 0.17;
+    // base_to_scan_1.transform.translation.z = 0.0;
+    // base_to_scan_1.transform.rotation.x = 0.0;
+    // base_to_scan_1.transform.rotation.y = 0.0;
+    // base_to_scan_1.transform.rotation.z = 1.0;
+    // base_to_scan_1.transform.rotation.w = 0.0;
+    base_to_scan_1.transform.translation.x = 0.2575;
+    base_to_scan_1.transform.translation.y = 0.0;
+    base_to_scan_1.transform.translation.z = 0.0;
+    base_to_scan_1.transform.rotation.x = 0.0;
+    base_to_scan_1.transform.rotation.y = 0.0;
+    base_to_scan_1.transform.rotation.z = 0.0099998;
+    base_to_scan_1.transform.rotation.w = 0.99995;
+    tf_buffer->setTransform(base_to_scan_1, "xloc_ros_wrapper", true);
+    tf3::TransformStampedMsg base_to_scan_2;
+    base_to_scan_2.header.frame_id = "base_link";
+    base_to_scan_2.child_frame_id = "scan_2";
+    base_to_scan_2.header.stamp = tf3::Time::now();
+    base_to_scan_2.transform.translation.x = -0.325;
+    base_to_scan_2.transform.translation.y = 0.133;
+    base_to_scan_2.transform.translation.z = 0.0;
+    base_to_scan_2.transform.rotation.x = 0.0;
+    base_to_scan_2.transform.rotation.y = 0.0;
+    base_to_scan_2.transform.rotation.z = 1.0;
+    base_to_scan_2.transform.rotation.w = 0.0;
+    tf_buffer->setTransform(base_to_scan_2, "xloc_ros_wrapper", true);
     tf3::TransformStampedMsg base_to_imu;
     base_to_imu.header.frame_id = "base_link";
     base_to_imu.child_frame_id = "imu";
@@ -314,7 +326,7 @@ int main(int argc, char** argv)
     }
 
     // Subscribers: scan, odom, imu
-    ros::Subscriber scan_sub = nh.subscribe<sensor_msgs::LaserScan>("scan", 10,
+    ros::Subscriber scan_sub = nh.subscribe<sensor_msgs::LaserScan>("scan_1", 10,
         [&](const sensor_msgs::LaserScan::ConstPtr& msg){
             if(xloc){
                 xloc::LaserScan ls;
@@ -329,7 +341,26 @@ int main(int argc, char** argv)
                 ls.range_max = msg->range_max;
                 ls.ranges.assign(msg->ranges.begin(), msg->ranges.end());
                 ls.intensities.assign(msg->intensities.begin(), msg->intensities.end());
-                xloc->DispatchSensorData("scan", ls);
+                xloc->DispatchSensorData("scan_1", ls);
+            }
+        });
+
+    ros::Subscriber scan_sub_2 = nh.subscribe<sensor_msgs::LaserScan>("scan_2", 10,
+        [&](const sensor_msgs::LaserScan::ConstPtr& msg){
+            if(xloc){
+                xloc::LaserScan ls;
+                ls.header.frame_id = msg->header.frame_id;
+                ls.header.stamp = xloc::UnixTime(msg->header.stamp.sec, msg->header.stamp.nsec);
+                ls.angle_min = msg->angle_min;
+                ls.angle_max = msg->angle_max;
+                ls.angle_increment = msg->angle_increment;
+                ls.time_increment = msg->time_increment;
+                ls.scan_time = msg->scan_time;
+                ls.range_min = msg->range_min;
+                ls.range_max = msg->range_max;
+                ls.ranges.assign(msg->ranges.begin(), msg->ranges.end());
+                ls.intensities.assign(msg->intensities.begin(), msg->intensities.end());
+                xloc->DispatchSensorData("scan_2", ls);
             }
         });
 
