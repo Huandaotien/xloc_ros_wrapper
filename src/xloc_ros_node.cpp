@@ -79,6 +79,9 @@ static void WaitForProcessingAndSync(std::unique_ptr<xloc::XLOCInterface>& xloc,
     constexpr int kPhase2TimeoutMs = 120000;  // 120s for PROCESSING to complete
     constexpr int kPollMs = 5;
 
+    // How long to wait for the four required map files to appear before syncing
+    constexpr int kFileWaitTimeoutMs = 60000; // 60s
+
     ROS_INFO("[xloc_ros_node] Waiting for map processing to complete before syncing '%s'...", map_file_name.c_str());
     // Phase 1: Wait for state to become PROCESSING (state=2)
     int elapsed = 0;
@@ -95,8 +98,30 @@ static void WaitForProcessingAndSync(std::unique_ptr<xloc::XLOCInterface>& xloc,
     }
 
     if (elapsed >= kPhase1TimeoutMs) {
-        ROS_WARN("[xloc_ros_node] Never saw PROCESSING state for '%s', attempting sync anyway", map_file_name.c_str());
-        SyncMapToInitDir(map_file_name);
+        ROS_WARN("[xloc_ros_node] Never saw PROCESSING state for '%s', will wait for map files then attempt sync", map_file_name.c_str());
+        // Wait for the four required files to appear in the source map directory
+        auto wait_start = std::chrono::steady_clock::now();
+        bool files_ready = false;
+        while (ros::ok() && std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - wait_start).count() < kFileWaitTimeoutMs) {
+            const char* home = std::getenv("HOME");
+            if (!home) break;
+            fs::path src_dir = fs::path(home) / ".local/share/xloc/resources/maps" / map_file_name;
+            fs::path f_pgm = src_dir / (map_file_name + std::string(".pgm"));
+            fs::path f_png = src_dir / (map_file_name + std::string(".png"));
+            fs::path f_xloc = src_dir / (map_file_name + std::string(".xloc"));
+            fs::path f_yaml = src_dir / (map_file_name + std::string(".yaml"));
+            std::error_code ec;
+            if (fs::exists(f_pgm, ec) && fs::exists(f_png, ec) && fs::exists(f_xloc, ec) && fs::exists(f_yaml, ec)) {
+                files_ready = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(kPollMs));
+        }
+        if (files_ready) {
+            SyncMapToInitDir(map_file_name);
+        } else {
+            ROS_WARN("[xloc_ros_node] Required map files for '%s' not found before timeout, skipping sync", map_file_name.c_str());
+        }
         return;
     }
 
@@ -106,8 +131,30 @@ static void WaitForProcessingAndSync(std::unique_ptr<xloc::XLOCInterface>& xloc,
         try {
             int state = static_cast<int>(xloc->GetDiagnostics().xloc_state.state);
             if (state == 3) {  // READY
-                ROS_INFO("[xloc_ros_node] Map processing complete, syncing '%s'", map_file_name.c_str());
-                SyncMapToInitDir(map_file_name);
+                ROS_INFO("[xloc_ros_node] Map processing complete for '%s', waiting for required map files then syncing", map_file_name.c_str());
+                // Wait for the four required files to appear in the source map directory
+                auto wait_start = std::chrono::steady_clock::now();
+                bool files_ready = false;
+                while (ros::ok() && std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - wait_start).count() < kFileWaitTimeoutMs) {
+                    const char* home = std::getenv("HOME");
+                    if (!home) break;
+                    fs::path src_dir = fs::path(home) / ".local/share/xloc/resources/maps" / map_file_name;
+                    fs::path f_pgm = src_dir / (map_file_name + std::string(".pgm"));
+                    fs::path f_png = src_dir / (map_file_name + std::string(".png"));
+                    fs::path f_xloc = src_dir / (map_file_name + std::string(".xloc"));
+                    fs::path f_yaml = src_dir / (map_file_name + std::string(".yaml"));
+                    std::error_code ec;
+                    if (fs::exists(f_pgm, ec) && fs::exists(f_png, ec) && fs::exists(f_xloc, ec) && fs::exists(f_yaml, ec)) {
+                        files_ready = true;
+                        break;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(kPollMs));
+                }
+                if (files_ready) {
+                    SyncMapToInitDir(map_file_name);
+                } else {
+                    ROS_WARN("[xloc_ros_node] Timeout waiting for required map files for '%s', skipping sync", map_file_name.c_str());
+                }
                 return;
             }
         } catch (...) {}
