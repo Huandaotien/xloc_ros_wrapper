@@ -76,10 +76,9 @@ static void WaitForProcessingAndSync(xloc_handle_t handle, std::string map_file_
 {
     constexpr int kPhase1TimeoutMs = 10000;   // 10s to enter PROCESSING
     constexpr int kPhase2TimeoutMs = 120000;  // 120s for PROCESSING to complete
-    constexpr int kPollMs = 500;
+    constexpr int kPollMs = 5;
 
     ROS_INFO("[xloc_ros_node_capi] Waiting for map processing to complete before syncing '%s'...", map_file_name.c_str());
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000)); // initial delay to allow processing to start
     // Phase 1: Wait for state to become PROCESSING (state=2)
     int elapsed = 0;
     while (ros::ok() && elapsed < kPhase1TimeoutMs) {
