@@ -21,6 +21,12 @@ find_package(catkin REQUIRED COMPONENTS
 add_message_files(
   FILES
   Diagnostics.msg
+  AmrControlDiagnostics_.msg
+  NavigationCommand.msg
+  NavigationFeedBack.msg
+  StatusCode_.msg
+  StatusResponse_.msg
+  XlocDiagnostics_.msg
 )
 
 ## Generate service files
@@ -38,6 +44,7 @@ add_service_files(
   ChangeMapOrigin.srv
   StartUpdateMap.srv
   StopUpdateMap.srv
+  StopCalibrate_.srv
 )
 
 generate_messages(DEPENDENCIES geometry_msgs std_msgs)
@@ -71,14 +78,15 @@ add_dependencies(xloc_ros_node_capi ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin
 
 ## Try to find libxloc from common locations (optional)
 find_library(XLOC_LIB xloc HINTS ${CMAKE_CURRENT_SOURCE_DIR}/../xloc_install/lib /usr/local/lib /usr/lib)
+find_library(TF3_LIB tf3 HINTS /usr/local/lib /usr/lib)
 if(XLOC_LIB)
   message(STATUS "Found libxloc: ${XLOC_LIB}")
-  target_link_libraries(xloc_ros_node ${catkin_LIBRARIES} ${XLOC_LIB})
-  target_link_libraries(xloc_ros_node_capi ${catkin_LIBRARIES} ${XLOC_LIB})
+  target_link_libraries(xloc_ros_node ${catkin_LIBRARIES} ${XLOC_LIB} ${TF3_LIB} stdc++fs)
+  target_link_libraries(xloc_ros_node_capi ${catkin_LIBRARIES} ${XLOC_LIB} ${TF3_LIB} stdc++fs)
 else()
   message(WARNING "libxloc not found; linking only against catkin libraries. If you have libxloc, set up link directories or install it to a standard location.")
-  target_link_libraries(xloc_ros_node ${catkin_LIBRARIES})
-  target_link_libraries(xloc_ros_node_capi ${catkin_LIBRARIES})
+  target_link_libraries(xloc_ros_node ${catkin_LIBRARIES} ${TF3_LIB} stdc++fs)
+  target_link_libraries(xloc_ros_node_capi ${catkin_LIBRARIES} ${TF3_LIB} stdc++fs)
 endif()
 
 ## Prefer installed xloc headers/libs from /usr/local when available
@@ -96,6 +104,7 @@ install(TARGETS xloc_ros_node xloc_ros_node_capi
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
-install(DIRECTORY include/
-  DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION}
+install(DIRECTORY
+  launch
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
 )

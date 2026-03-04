@@ -24,6 +24,7 @@
 #include "xloc_ros_wrapper/StartUpdateMap.h"
 #include "xloc_ros_wrapper/StopUpdateMap.h"
 #include "xloc_ros_wrapper/Diagnostics.h"
+#include "xloc_ros_wrapper/XlocDiagnostics_.h"
 #include <tf3/buffer_core.h>
 #include <tf3/compat.h>
 #include <tf3/LinearMath/Transform.h>
@@ -32,6 +33,88 @@
 #include <fstream>
 
 using namespace std::chrono_literals;
+namespace fs = std::filesystem;
+
+// Sync map directory from xloc map directory to $HOME/init/maps/
+// Map structure: maps/<map_name>/<map_name>.xloc, .yaml, .pgm, .png
+static void SyncMapToInitDir(const std::string& map_file_name)
+{
+    const char* home = std::getenv("HOME");
+    if (!home) {
+        ROS_WARN("[xloc_ros_node] Cannot determine HOME directory for map sync");
+        return;
+    }
+    fs::path src_path = fs::path(home) / ".local/share/xloc/resources/maps" / map_file_name;
+    fs::path dst_path = fs::path(home) / "init/maps" / map_file_name;
+
+    std::error_code ec;
+    if (!fs::exists(src_path, ec)) {
+        ROS_WARN("[xloc_ros_node] Map directory '%s' not found", src_path.c_str());
+        return;
+    }
+
+    // Create parent destination directory ($HOME/init/maps/)
+    fs::create_directories(dst_path.parent_path(), ec);
+    if (ec) {
+        ROS_WARN("[xloc_ros_node] Failed to create %s: %s", dst_path.parent_path().c_str(), ec.message().c_str());
+        return;
+    }
+
+    // Remove existing destination to ensure clean copy
+    fs::remove_all(dst_path, ec);
+
+    // Copy the entire map directory recursively
+    fs::copy(src_path, dst_path, fs::copy_options::recursive, ec);
+    if (ec) {
+        ROS_WARN("[xloc_ros_node] Failed to sync map '%s': %s", map_file_name.c_str(), ec.message().c_str());
+    } else {
+        ROS_INFO("[xloc_ros_node] Synced map directory: %s -> %s", src_path.c_str(), dst_path.c_str());
+    }
+}
+
+// Wait for xloc async processing (PROCESSING=2 -> READY=3) then sync map
+static void WaitForProcessingAndSync(std::unique_ptr<xloc::XLOCInterface>& xloc, std::string map_file_name)
+{
+    constexpr int kPhase1TimeoutMs = 10000;   // 10s to enter PROCESSING
+    constexpr int kPhase2TimeoutMs = 120000;  // 120s for PROCESSING to complete
+    constexpr int kPollMs = 500;
+
+    ROS_INFO("[xloc_ros_node] Waiting for map processing to complete before syncing '%s'...", map_file_name.c_str());
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000)); // initial delay to allow processing to start
+    // Phase 1: Wait for state to become PROCESSING (state=2)
+    int elapsed = 0;
+    while (ros::ok() && elapsed < kPhase1TimeoutMs) {
+        try {
+            int state = static_cast<int>(xloc->GetDiagnostics().xloc_state.state);
+            if (state == 2) break;  // PROCESSING
+        } catch (...) {}
+        std::this_thread::sleep_for(std::chrono::milliseconds(kPollMs));
+        elapsed += kPollMs;
+    }
+
+    if (elapsed >= kPhase1TimeoutMs) {
+        ROS_WARN("[xloc_ros_node] Never saw PROCESSING state for '%s', attempting sync anyway", map_file_name.c_str());
+        SyncMapToInitDir(map_file_name);
+        return;
+    }
+
+    // Phase 2: Wait for state to transition from PROCESSING to READY (state=3)
+    elapsed = 0;
+    while (ros::ok() && elapsed < kPhase2TimeoutMs) {
+        try {
+            int state = static_cast<int>(xloc->GetDiagnostics().xloc_state.state);
+            if (state == 3) {  // READY
+                ROS_INFO("[xloc_ros_node] Map processing complete, syncing '%s'", map_file_name.c_str());
+                SyncMapToInitDir(map_file_name);
+                return;
+            }
+        } catch (...) {}
+        std::this_thread::sleep_for(std::chrono::milliseconds(kPollMs));
+        elapsed += kPollMs;
+    }
+
+    ROS_WARN("[xloc_ros_node] Timeout waiting for map processing to complete for '%s'", map_file_name.c_str());
+}
 
 // Helper converters between ROS messages and xloc types
 static xloc::Pose ToXlocPose(const geometry_msgs::Pose& p)
@@ -120,10 +203,11 @@ std::thread pub_visualization_thread;
 std::thread pub_map_thread;
 
 void MainThread(std::unique_ptr<xloc::XLOCInterface>& xloc, std::shared_ptr<tf3::BufferCore> tf_buffer,
-                   tf2_ros::TransformBroadcaster & tf_broadcaster, ros::Publisher & diagnostics_pub, ros::Publisher & pose_pub)
+                   tf2_ros::TransformBroadcaster & tf_broadcaster, ros::Publisher & diagnostics_pub,
+                   ros::Publisher & diagnostics_pub2, ros::Publisher & pose_pub)
 {
     xloc::Diagnostics diag;
-    ros::Rate rate(10.0); // 10 Hz
+    ros::Rate rate(30.0); // 30 Hz
     while(ros::ok()){
         if(xloc && tf_buffer)
         {
@@ -139,6 +223,15 @@ void MainThread(std::unique_ptr<xloc::XLOCInterface>& xloc, std::shared_ptr<tf3:
                 diag_msg.reliability = diag.reliability;
                 diag_msg.matching_score = diag.matching_score;
                 diagnostics_pub.publish(diag_msg);
+                xloc_ros_wrapper::XlocDiagnostics_ diag_msg2;
+                diag_msg2.header.stamp = ros::Time(diag.header.stamp.sec, diag.header.stamp.nsec);
+                diag_msg2.header.frame_id = diag.header.frame_id;
+                diag_msg2.SlamState = static_cast<uint8_t>(diag.xloc_state.state);
+                diag_msg2.SlamStateDetail = diag.xloc_state.message;
+                diag_msg2.CurrentActiveMap = diag.current_active_map;
+                uint8_t LocalizationQuality = std::min(static_cast<int>(diag.reliability), static_cast<int>(diag.matching_score));
+                diag_msg2.LocalizationQuality = LocalizationQuality;
+                diagnostics_pub2.publish(diag_msg2);
                 // ROS_INFO_THROTTLE(3.0, "XLOC Diagnostics:\nstate:%d\nmessage:%s\nactive_map:%s\nreliability:%.3f\nmatching_score:%.3f",
                 //     diag_msg.xloc_state,
                 //     diag_msg.xloc_state_message.c_str(),
@@ -146,6 +239,36 @@ void MainThread(std::unique_ptr<xloc::XLOCInterface>& xloc, std::shared_ptr<tf3:
                 //     diag_msg.reliability,
                 //     diag_msg.matching_score);
                 xloc::PoseStamped current_pose = xloc->GetCurrentPose();
+                // check if pose.orientation is valid (is not infinite, valid normalization), if not, publish (0,0,0,1) and log warning
+                if (!std::isfinite(current_pose.pose.orientation.x) || !std::isfinite(current_pose.pose.orientation.y) ||
+                    !std::isfinite(current_pose.pose.orientation.z) || !std::isfinite(current_pose.pose.orientation.w) ||
+                    !std::isfinite(current_pose.pose.position.x) || !std::isfinite(current_pose.pose.position.y) ||
+                    !std::isfinite(current_pose.pose.position.z)) {
+                    ROS_WARN_THROTTLE(5.0, "Invalid pose, publishing (0,0,0,1)");
+                    current_pose.pose.position.x = 0.0;
+                    current_pose.pose.position.y = 0.0;
+                    current_pose.pose.position.z = 0.0;
+                    current_pose.pose.orientation.x = 0.0;
+                    current_pose.pose.orientation.y = 0.0;
+                    current_pose.pose.orientation.z = 0.0;
+                    current_pose.pose.orientation.w = 1.0;
+                }
+                else{
+                    double norm = std::sqrt(std::pow(current_pose.pose.orientation.x, 2) +
+                                            std::pow(current_pose.pose.orientation.y, 2) +
+                                            std::pow(current_pose.pose.orientation.z, 2) +
+                                            std::pow(current_pose.pose.orientation.w, 2));
+                    if (std::abs(norm - 1.0) > 0.01) {
+                        ROS_WARN_THROTTLE(5.0, "Pose orientation is not normalized (norm=%.3f), publishing (0,0,0,1)", norm);
+                        current_pose.pose.position.x = 0.0;
+                        current_pose.pose.position.y = 0.0;
+                        current_pose.pose.position.z = 0.0;
+                        current_pose.pose.orientation.x = 0.0;
+                        current_pose.pose.orientation.y = 0.0;
+                        current_pose.pose.orientation.z = 0.0;
+                        current_pose.pose.orientation.w = 1.0;
+                    }                    
+                }
                 geometry_msgs::PoseStamped pose_msg = FromXlocPoseStamped(current_pose);
                 // publish current pose
                 pose_pub.publish(pose_msg);
@@ -472,7 +595,13 @@ int main(int argc, char** argv)
         [&](xloc_ros_wrapper::StopMapping::Request& req, xloc_ros_wrapper::StopMapping::Response& res)->bool{
             if(!xloc){ res.code = 255; res.message = "xloc not available"; return true; }
             xloc::StatusResponse s = xloc->StopMapping(req.map_file_name);
-            res.code = s.code; res.message = s.message; return true;
+            res.code = s.code; res.message = s.message;
+            if(s.code == 0 && !req.map_file_name.empty()){
+                std::thread([&xloc, name = req.map_file_name](){
+                    WaitForProcessingAndSync(xloc, name);
+                }).detach();
+            }
+            return true;
         }
     );
 
@@ -540,9 +669,18 @@ int main(int argc, char** argv)
         "change_map_origin",
         [&](xloc_ros_wrapper::ChangeMapOrigin::Request& req, xloc_ros_wrapper::ChangeMapOrigin::Response& res)->bool{
             if(!xloc){ res.code = 255; res.message = "xloc not available"; return true; }
+            // Get current active map name before the operation
+            std::string active_map;
+            try { active_map = xloc->GetDiagnostics().current_active_map; } catch (...) {}
             xloc::Pose p = ToXlocPose(req.new_map_origin);
             xloc::StatusResponse s = xloc->ChangeMapOrigin(p);
-            res.code = s.code; res.message = s.message; return true;
+            res.code = s.code; res.message = s.message;
+            if(s.code == 0 && !active_map.empty()){
+                std::thread([&xloc, name = std::move(active_map)](){
+                    WaitForProcessingAndSync(xloc, name);
+                }).detach();
+            }
+            return true;
         }
     );
 
@@ -567,14 +705,15 @@ int main(int argc, char** argv)
     ros::Publisher traj_node_pub = nh.advertise<visualization_msgs::MarkerArray>("xloc/trajectory_nodes", 10);
     ros::Publisher constraint_pub = nh.advertise<visualization_msgs::MarkerArray>("xloc/constraints", 10);
     ros::Publisher diagnostics_pub = nh.advertise<xloc_ros_wrapper::Diagnostics>("xloc/diagnostics", 10);
+    ros::Publisher diagnostics_pub2 = nh.advertise<xloc_ros_wrapper::XlocDiagnostics_>("/xloc_diagnostics", 10);
     ros::Publisher occupancy_pub = nh.advertise<nav_msgs::OccupancyGrid>("/map", 10, true);
-    ros::Publisher pose_pub = nh.advertise<geometry_msgs::PoseStamped>("xloc/current_pose", 10);
+    ros::Publisher pose_pub = nh.advertise<geometry_msgs::PoseStamped>("/xloc_pose", 10);
     // create broadcaster AFTER ros::init
     tf2_ros::TransformBroadcaster tf_broadcaster;
 
     // Start processing thread (pass broadcaster by reference)
     main_thread = std::thread(MainThread,
-        std::ref(xloc), tf_buffer, std::ref(tf_broadcaster), std::ref(diagnostics_pub), std::ref(pose_pub));
+        std::ref(xloc), tf_buffer, std::ref(tf_broadcaster), std::ref(diagnostics_pub), std::ref(diagnostics_pub2),  std::ref(pose_pub));
     pub_visualization_thread = std::thread(PubVisualizationThread, std::ref(xloc), std::ref(traj_node_pub), std::ref(constraint_pub));
     pub_map_thread = std::thread(PubMapThread, std::ref(xloc), std::ref(occupancy_pub));
     ROS_INFO("xloc_ros_node ready");

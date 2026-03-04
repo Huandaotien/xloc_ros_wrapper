@@ -29,8 +29,95 @@
 #include <thread>
 #include <vector>
 #include <string>
+#include <filesystem>
 
 using namespace std::chrono_literals;
+namespace fs = std::filesystem;
+
+// Sync map directory from xloc map directory to $HOME/init/maps/
+// Map structure: maps/<map_name>/<map_name>.xloc, .yaml, .pgm, .png
+static void SyncMapToInitDir(const std::string& map_file_name)
+{
+    const char* home = std::getenv("HOME");
+    if (!home) {
+        ROS_WARN("[xloc_ros_node_capi] Cannot determine HOME directory for map sync");
+        return;
+    }
+    fs::path src_path = fs::path(home) / ".local/share/xloc/resources/maps" / map_file_name;
+    fs::path dst_path = fs::path(home) / "init/maps" / map_file_name;
+
+    std::error_code ec;
+    if (!fs::exists(src_path, ec)) {
+        ROS_WARN("[xloc_ros_node_capi] Map directory '%s' not found", src_path.c_str());
+        return;
+    }
+
+    // Create parent destination directory ($HOME/init/maps/)
+    fs::create_directories(dst_path.parent_path(), ec);
+    if (ec) {
+        ROS_WARN("[xloc_ros_node_capi] Failed to create %s: %s", dst_path.parent_path().c_str(), ec.message().c_str());
+        return;
+    }
+
+    // Remove existing destination to ensure clean copy
+    fs::remove_all(dst_path, ec);
+
+    // Copy the entire map directory recursively
+    fs::copy(src_path, dst_path, fs::copy_options::recursive, ec);
+    if (ec) {
+        ROS_WARN("[xloc_ros_node_capi] Failed to sync map '%s': %s", map_file_name.c_str(), ec.message().c_str());
+    } else {
+        ROS_INFO("[xloc_ros_node_capi] Synced map directory: %s -> %s", src_path.c_str(), dst_path.c_str());
+    }
+}
+
+// Wait for xloc async processing (PROCESSING=2 -> READY=3) then sync map
+static void WaitForProcessingAndSync(xloc_handle_t handle, std::string map_file_name)
+{
+    constexpr int kPhase1TimeoutMs = 10000;   // 10s to enter PROCESSING
+    constexpr int kPhase2TimeoutMs = 120000;  // 120s for PROCESSING to complete
+    constexpr int kPollMs = 500;
+
+    ROS_INFO("[xloc_ros_node_capi] Waiting for map processing to complete before syncing '%s'...", map_file_name.c_str());
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000)); // initial delay to allow processing to start
+    // Phase 1: Wait for state to become PROCESSING (state=2)
+    int elapsed = 0;
+    while (ros::ok() && elapsed < kPhase1TimeoutMs) {
+        xloc_diagnostics_t* d = xloc_get_diagnostics(handle);
+        if (d) {
+            int state = d->xloc_state;
+            xloc_free_diagnostics(d);
+            if (state == 2) break;  // PROCESSING
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(kPollMs));
+        elapsed += kPollMs;
+    }
+
+    if (elapsed >= kPhase1TimeoutMs) {
+        ROS_WARN("[xloc_ros_node_capi] Never saw PROCESSING state for '%s', attempting sync anyway", map_file_name.c_str());
+        SyncMapToInitDir(map_file_name);
+        return;
+    }
+
+    // Phase 2: Wait for state to transition from PROCESSING to READY (state=3)
+    elapsed = 0;
+    while (ros::ok() && elapsed < kPhase2TimeoutMs) {
+        xloc_diagnostics_t* d = xloc_get_diagnostics(handle);
+        if (d) {
+            int state = d->xloc_state;
+            xloc_free_diagnostics(d);
+            if (state == 3) {  // READY
+                ROS_INFO("[xloc_ros_node_capi] Map processing complete, syncing '%s'", map_file_name.c_str());
+                SyncMapToInitDir(map_file_name);
+                return;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(kPollMs));
+        elapsed += kPollMs;
+    }
+
+    ROS_WARN("[xloc_ros_node_capi] Timeout waiting for map processing to complete for '%s'", map_file_name.c_str());
+}
 
 static geometry_msgs::PoseStamped FromCpose(const xloc_pose_t* p, const xloc_header_t* h)
 {
@@ -457,6 +544,11 @@ int main(int argc, char** argv)
             if(!handle){ res.code = 255; res.message = "xloc not available"; return true; }
             xloc_status_response_t r = xloc_stop_mapping(handle, req.map_file_name.c_str());
             res.code = r.code; res.message = r.message ? std::string(r.message) : std::string("");
+            if(r.code == 0 && !req.map_file_name.empty()){
+                std::thread([handle, name = req.map_file_name](){
+                    WaitForProcessingAndSync(handle, name);
+                }).detach();
+            }
             xloc_free_status_response(&r);
             return true;
         });
@@ -531,11 +623,20 @@ int main(int argc, char** argv)
     ros::ServiceServer srv_change_origin = nh.advertiseService<xloc_ros_wrapper::ChangeMapOrigin::Request, xloc_ros_wrapper::ChangeMapOrigin::Response>("change_map_origin",
         [&](xloc_ros_wrapper::ChangeMapOrigin::Request& req, xloc_ros_wrapper::ChangeMapOrigin::Response& res)->bool{
             if(!handle){ res.code = 255; res.message = "xloc not available"; return true; }
+            // Get current active map name before the operation
+            std::string active_map;
+            xloc_diagnostics_t* d = xloc_get_diagnostics(handle);
+            if(d && d->current_active_map){ active_map = d->current_active_map; xloc_free_diagnostics(d); }
             xloc_pose_t np;
             np.position[0] = req.new_map_origin.position.x; np.position[1] = req.new_map_origin.position.y; np.position[2] = req.new_map_origin.position.z;
             np.orientation[0] = req.new_map_origin.orientation.x; np.orientation[1] = req.new_map_origin.orientation.y; np.orientation[2] = req.new_map_origin.orientation.z; np.orientation[3] = req.new_map_origin.orientation.w;
             xloc_status_response_t r = xloc_change_map_origin(handle, &np);
             res.code = r.code; res.message = r.message ? std::string(r.message) : std::string("");
+            if(r.code == 0 && !active_map.empty()){
+                std::thread([handle, name = std::move(active_map)](){
+                    WaitForProcessingAndSync(handle, name);
+                }).detach();
+            }
             xloc_free_status_response(&r);
             return true;
         });
