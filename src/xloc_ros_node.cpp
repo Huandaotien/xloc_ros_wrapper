@@ -498,11 +498,12 @@ int main(int argc, char** argv)
     }
 
     // Subscribers: scan, odom, imu
-    ros::Subscriber scan_sub = nh.subscribe<sensor_msgs::LaserScan>("scan_1", 10,
+    ros::Subscriber scan_sub = nh.subscribe<sensor_msgs::LaserScan>("front_scan", 10,
         [&](const sensor_msgs::LaserScan::ConstPtr& msg){
             if(xloc){
                 xloc::LaserScan ls;
-                ls.header.frame_id = msg->header.frame_id;
+                // ls.header.frame_id = msg->header.frame_id;
+                ls.header.frame_id = "scan_1";
                 ls.header.stamp = xloc::UnixTime(msg->header.stamp.sec, msg->header.stamp.nsec);
                 ls.angle_min = msg->angle_min;
                 ls.angle_max = msg->angle_max;
@@ -517,11 +518,12 @@ int main(int argc, char** argv)
             }
         });
 
-    ros::Subscriber scan_sub_2 = nh.subscribe<sensor_msgs::LaserScan>("scan_2", 10,
+    ros::Subscriber scan_sub_2 = nh.subscribe<sensor_msgs::LaserScan>("rear_scan", 10,
         [&](const sensor_msgs::LaserScan::ConstPtr& msg){
             if(xloc){
                 xloc::LaserScan ls;
-                ls.header.frame_id = msg->header.frame_id;
+                // ls.header.frame_id = msg->header.frame_id;
+                ls.header.frame_id = "scan_2";
                 ls.header.stamp = xloc::UnixTime(msg->header.stamp.sec, msg->header.stamp.nsec);
                 ls.angle_min = msg->angle_min;
                 ls.angle_max = msg->angle_max;
