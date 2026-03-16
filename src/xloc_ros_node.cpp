@@ -315,10 +315,10 @@ int main(int argc, char** argv)
     base_to_imu.transform.translation.x = 0.0;
     base_to_imu.transform.translation.y = 0.0;
     base_to_imu.transform.translation.z = 0.0;
-    base_to_imu.transform.rotation.x = 1.0;
+    base_to_imu.transform.rotation.x = 0.0;
     base_to_imu.transform.rotation.y = 0.0;
     base_to_imu.transform.rotation.z = 0.0;
-    base_to_imu.transform.rotation.w = 0.0;
+    base_to_imu.transform.rotation.w = 1.0;
     tf_buffer->setTransform(base_to_imu, "xloc_ros_wrapper", true);
     std::unique_ptr<xloc::XLOCInterface> xloc = xloc::CreateXLOC(tf_buffer);
     if(!xloc){
