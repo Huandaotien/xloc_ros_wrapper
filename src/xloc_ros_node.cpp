@@ -460,20 +460,20 @@ int main(int argc, char** argv)
     // base_to_scan_1.transform.rotation.y = 0.0;
     // base_to_scan_1.transform.rotation.z = 1.0;
     // base_to_scan_1.transform.rotation.w = 0.0;
-    base_to_scan_1.transform.translation.x = 0.2575;
+    base_to_scan_1.transform.translation.x = 0.4447;
     base_to_scan_1.transform.translation.y = 0.0;
     base_to_scan_1.transform.translation.z = 0.0;
     base_to_scan_1.transform.rotation.x = 0.0;
     base_to_scan_1.transform.rotation.y = 0.0;
-    base_to_scan_1.transform.rotation.z = 0.0099998;
-    base_to_scan_1.transform.rotation.w = 0.99995;
+    base_to_scan_1.transform.rotation.z = 0.0;
+    base_to_scan_1.transform.rotation.w = 1.0;
     tf_buffer->setTransform(base_to_scan_1, "xloc_ros_wrapper", true);
     tf3::TransformStampedMsg base_to_scan_2;
     base_to_scan_2.header.frame_id = "base_link";
     base_to_scan_2.child_frame_id = "scan_2";
     base_to_scan_2.header.stamp = tf3::Time::now();
-    base_to_scan_2.transform.translation.x = -0.325;
-    base_to_scan_2.transform.translation.y = 0.133;
+    base_to_scan_2.transform.translation.x = -0.4447;
+    base_to_scan_2.transform.translation.y = 0.0;
     base_to_scan_2.transform.translation.z = 0.0;
     base_to_scan_2.transform.rotation.x = 0.0;
     base_to_scan_2.transform.rotation.y = 0.0;
@@ -487,10 +487,10 @@ int main(int argc, char** argv)
     base_to_imu.transform.translation.x = 0.0;
     base_to_imu.transform.translation.y = 0.0;
     base_to_imu.transform.translation.z = 0.0;
-    base_to_imu.transform.rotation.x = 1.0;
+    base_to_imu.transform.rotation.x = 0.0;
     base_to_imu.transform.rotation.y = 0.0;
     base_to_imu.transform.rotation.z = 0.0;
-    base_to_imu.transform.rotation.w = 0.0;
+    base_to_imu.transform.rotation.w = 1.0;
     tf_buffer->setTransform(base_to_imu, "xloc_ros_wrapper", true);
     std::unique_ptr<xloc::XLOCInterface> xloc = xloc::CreateXLOC(tf_buffer);
     if(!xloc){
