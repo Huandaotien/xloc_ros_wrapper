@@ -71,20 +71,29 @@ add_dependencies(xloc_ros_node_capi ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin
 
 ## Try to find libxloc from common locations (optional)
 find_library(XLOC_LIB xloc HINTS ${CMAKE_CURRENT_SOURCE_DIR}/../xloc_install/lib /usr/local/lib /usr/lib)
+find_library(GLOG_LIB glog)
+find_library(TF3_LIB tf3 HINTS /usr/local/lib /usr/lib)
 if(XLOC_LIB)
   message(STATUS "Found libxloc: ${XLOC_LIB}")
-  target_link_libraries(xloc_ros_node ${catkin_LIBRARIES} ${XLOC_LIB})
-  target_link_libraries(xloc_ros_node_capi ${catkin_LIBRARIES} ${XLOC_LIB})
+  target_link_libraries(xloc_ros_node ${catkin_LIBRARIES} ${XLOC_LIB} ${GLOG_LIB} ${TF3_LIB})
+  target_link_libraries(xloc_ros_node_capi ${catkin_LIBRARIES} ${XLOC_LIB} ${GLOG_LIB} ${TF3_LIB})
 else()
   message(WARNING "libxloc not found; linking only against catkin libraries. If you have libxloc, set up link directories or install it to a standard location.")
-  target_link_libraries(xloc_ros_node ${catkin_LIBRARIES})
-  target_link_libraries(xloc_ros_node_capi ${catkin_LIBRARIES})
+  target_link_libraries(xloc_ros_node ${catkin_LIBRARIES} ${GLOG_LIB})
+  target_link_libraries(xloc_ros_node_capi ${catkin_LIBRARIES} ${GLOG_LIB})
 endif()
 
-## Prefer installed xloc headers/libs from /usr/local when available
-find_path(XLOC_INCLUDE_DIR xloc_c_api.h HINTS /usr/local/include /usr/include ${CMAKE_CURRENT_SOURCE_DIR}/../xloc_install/include)
+## Prefer installed xloc headers/libs from /usr/local when available.
+## The headers install into <prefix>/include/xloc/ and the sources include them
+## path-qualified (#include <xloc/xloc_interface.h>), so search for the
+## qualified name "xloc/xloc_c_api.h". find_path then returns the PARENT
+## directory (e.g. /usr/local/include), which is exactly what has to go on the
+## include path. Searching for the bare "xloc_c_api.h" could never match and
+## made this always warn even on a perfectly good install.
+find_path(XLOC_INCLUDE_DIR xloc/xloc_c_api.h
+  HINTS /usr/local/include /usr/include ${CMAKE_CURRENT_SOURCE_DIR}/../xloc_install/include)
 if(XLOC_INCLUDE_DIR)
-  message(STATUS "Found xloc headers: ${XLOC_INCLUDE_DIR}")
+  message(STATUS "Found xloc headers: ${XLOC_INCLUDE_DIR}/xloc")
   include_directories(${XLOC_INCLUDE_DIR})
 else()
   message(WARNING "xloc headers not found in /usr/local/include or install dir; falling back to source-tree include if present.")

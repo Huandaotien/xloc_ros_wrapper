@@ -30,6 +30,8 @@
 #include <any>
 #include <filesystem>
 #include <fstream>
+#include <cstdio>
+#include <string>
 
 using namespace std::chrono_literals;
 
@@ -62,13 +64,23 @@ static geometry_msgs::PoseStamped FromXlocPoseStamped(const xloc::PoseStamped& p
     return out;
 }
 
-static visualization_msgs::MarkerArray FromXlocMarkerArray(const xloc::MarkerArray& xloc_ma)
+// When `use_latest_tf` is true the marker stamp is forced to ros::Time(0),
+// which tells RViz/tf2 to use the most recent available transform for the
+// marker's frame instead of requiring a transform at an exact time. This is the
+// right choice for markers expressed in a dynamic frame (e.g. base_link): the
+// xloc-side stamp (wall clock) need not line up with the TF broadcast stamps
+// (sensor/sim time), and a mismatch would otherwise raise a "no transform at
+// requested time" error and drop the marker.
+static visualization_msgs::MarkerArray FromXlocMarkerArray(const xloc::MarkerArray& xloc_ma,
+                                                           bool use_latest_tf = false)
 {
     visualization_msgs::MarkerArray ros_ma;
     for(const auto& xloc_marker : xloc_ma.markers)
     {
         visualization_msgs::Marker ros_marker;
-        ros_marker.header.stamp = ros::Time(xloc_marker.header.stamp.sec, xloc_marker.header.stamp.nsec);
+        ros_marker.header.stamp = use_latest_tf
+            ? ros::Time(0)
+            : ros::Time(xloc_marker.header.stamp.sec, xloc_marker.header.stamp.nsec);
         ros_marker.header.frame_id = xloc_marker.header.frame_id;
         ros_marker.ns = xloc_marker.ns;
         ros_marker.id = xloc_marker.id;
@@ -214,9 +226,13 @@ static nav_msgs::OccupancyGrid FromXlocOccupancyGrid(const xloc::OccupancyGrid& 
     return out;
 }
 
-void PubVisualizationThread(std::unique_ptr<xloc::XLOCInterface>& xloc, ros::Publisher& traj_node_pub, ros::Publisher& constraint_pub)
+void PubVisualizationThread(std::unique_ptr<xloc::XLOCInterface>& xloc, ros::Publisher& traj_node_pub, ros::Publisher& constraint_pub,
+                            ros::Publisher& virtual_line_pub, ros::Publisher& virtual_sensor_pub)
 {
-    ros::Rate rate(1.0); // 1 Hz for visualization markers
+    // 5 Hz so the live virtual line/code sensor markers track the pose smoothly;
+    // the static map markers and slower trajectory/constraint markers are cheap
+    // to republish at this rate.
+    ros::Rate rate(5.0);
     while(ros::ok()){
         if(xloc){
             const xloc::MarkerArray& traj_nodes = xloc->GetTrajectoryNodeListMarker();
@@ -225,6 +241,21 @@ void PubVisualizationThread(std::unique_ptr<xloc::XLOCInterface>& xloc, ros::Pub
             visualization_msgs::MarkerArray ros_constraints = FromXlocMarkerArray(constraints);
             traj_node_pub.publish(ros_traj_nodes);
             constraint_pub.publish(ros_constraints);
+
+            // Virtual Line Navigation visualization:
+            //  * virtual_line_pub: the static map geometry (NURBS lines + codes).
+            //  * virtual_sensor_pub: the live sensor segments, intersection
+            //    points and code reads at the current pose.
+            // Both arrays are empty when VLN is not enabled, so this is a no-op
+            // for maps without virtual lines.
+            const xloc::MarkerArray& vlines = xloc->GetVirtualLineMapMarker();
+            const xloc::MarkerArray& vsensor = xloc->GetVirtualSensorMarker();
+            // Static map geometry is in the map frame (no dynamic TF needed).
+            // The live sensor markers mix the dynamic base_link frame (segments)
+            // with the map frame (hits/codes); force latest-TF lookup so the
+            // base_link segments resolve regardless of stamp skew.
+            virtual_line_pub.publish(FromXlocMarkerArray(vlines));
+            virtual_sensor_pub.publish(FromXlocMarkerArray(vsensor, /*use_latest_tf=*/true));
         }
         rate.sleep();
     }
@@ -279,7 +310,7 @@ int main(int argc, char** argv)
     std::shared_ptr<::tf3::BufferCore> tf_buffer = std::make_shared<::tf3::BufferCore>(tf3::Duration(10.0));
     tf3::TransformStampedMsg base_to_scan_1;
     base_to_scan_1.header.frame_id = "base_link";
-    base_to_scan_1.child_frame_id = "scan_1";
+    base_to_scan_1.child_frame_id = "scan";
     base_to_scan_1.header.stamp = tf3::Time::now();
     // base_to_scan_1.transform.translation.x = -0.55;
     // base_to_scan_1.transform.translation.y = 0.17;
@@ -301,7 +332,7 @@ int main(int argc, char** argv)
     base_to_scan_2.child_frame_id = "scan_2";
     base_to_scan_2.header.stamp = tf3::Time::now();
     base_to_scan_2.transform.translation.x = -0.325;
-    base_to_scan_2.transform.translation.y = 0.133;
+    base_to_scan_2.transform.translation.y = -0.135;
     base_to_scan_2.transform.translation.z = 0.0;
     base_to_scan_2.transform.rotation.x = 0.0;
     base_to_scan_2.transform.rotation.y = 0.0;
@@ -325,8 +356,60 @@ int main(int argc, char** argv)
         ROS_ERROR("Failed to create XLOC instance. Ensure libxloc is available and linked.");
     }
 
+    // --- Virtual Line Navigation callback test/verification --------------
+    // Register the continuous virtual-line and event-based virtual-code
+    // callbacks and log what they deliver. Use this to verify the VLN pipeline
+    // end-to-end from a running system: the line callback should fire on every
+    // localized pose (throttled here to keep the console readable), and the
+    // code callback should fire once each time a code sensor enters a code's
+    // reading zone.
+    if(xloc){
+        xloc->SetVirtualLineCallback(
+            [](const std::vector<xloc::LineMeasurement>& lines){
+                // Build ONE line covering every sensor, then throttle it. A
+                // per-sensor ROS_INFO_THROTTLE would share a single line-based
+                // throttle timer across all iterations, so only the first
+                // sensor (e.g. source_id 101) would ever print and the rest
+                // (102, ...) would be silently dropped.
+                std::string report;
+                for(const auto& m : lines){
+                    char head[96];
+                    snprintf(head, sizeof(head),
+                             "{id=%d visible=%u offsets_m=[ ",
+                             m.source_id,
+                             static_cast<unsigned>(m.num_lines_visible));
+                    report += head;
+                    for(double o : m.lane_offsets_m){
+                        char buf[32];
+                        snprintf(buf, sizeof(buf), "%.3f ", o);
+                        report += buf;
+                    }
+                    report += "]} ";
+                }
+                ROS_INFO_THROTTLE(1.0, "[VirtualLine] %s", report.c_str());
+            });
+        xloc->SetVirtualCodeCallback(
+            [](const std::vector<xloc::CodeMeasurement>& codes){
+                // Continuous: fires every frame a code is inside a reading zone.
+                // Aggregate all reads into one throttled line (same reasoning as
+                // the line callback: a per-read ROS_INFO_THROTTLE shares one
+                // line-based timer and would drop all but the first read).
+                std::string report;
+                for(const auto& m : codes){
+                    char buf[96];
+                    snprintf(buf, sizeof(buf),
+                             "{id=%d code=%ld dist_m=%.3f} ",
+                             m.source_id, static_cast<long>(m.code),
+                             m.distance_m);
+                    report += buf;
+                }
+                ROS_INFO_THROTTLE(1.0, "[VirtualCode] %s", report.c_str());
+            });
+        ROS_INFO("Virtual Line/Code callbacks registered (test logging enabled).");
+    }
+
     // Subscribers: scan, odom, imu
-    ros::Subscriber scan_sub = nh.subscribe<sensor_msgs::LaserScan>("scan_1", 10,
+    ros::Subscriber scan_sub = nh.subscribe<sensor_msgs::LaserScan>("scan", 10,
         [&](const sensor_msgs::LaserScan::ConstPtr& msg){
             if(xloc){
                 xloc::LaserScan ls;
@@ -341,7 +424,7 @@ int main(int argc, char** argv)
                 ls.range_max = msg->range_max;
                 ls.ranges.assign(msg->ranges.begin(), msg->ranges.end());
                 ls.intensities.assign(msg->intensities.begin(), msg->intensities.end());
-                xloc->DispatchSensorData("scan_1", ls);
+                xloc->DispatchLaserScan("scan", std::make_shared<const xloc::LaserScan>(std::move(ls)));
             }
         });
 
@@ -360,7 +443,7 @@ int main(int argc, char** argv)
                 ls.range_max = msg->range_max;
                 ls.ranges.assign(msg->ranges.begin(), msg->ranges.end());
                 ls.intensities.assign(msg->intensities.begin(), msg->intensities.end());
-                xloc->DispatchSensorData("scan_2", ls);
+                xloc->DispatchLaserScan("scan_2", std::make_shared<const xloc::LaserScan>(std::move(ls)));
             }
         });
 
@@ -384,7 +467,7 @@ int main(int argc, char** argv)
                 odom.twist.twist.angular.x = msg->twist.twist.angular.x;
                 odom.twist.twist.angular.y = msg->twist.twist.angular.y;
                 odom.twist.twist.angular.z = msg->twist.twist.angular.z;
-                xloc->DispatchSensorData("odom", odom);
+                xloc->DispatchOdometry("odom", std::make_shared<const xloc::Odometry>(std::move(odom)));
             }
         });
 
@@ -431,7 +514,7 @@ int main(int argc, char** argv)
                 imu.linear_acceleration_covariance[6] = msg->linear_acceleration_covariance[6];
                 imu.linear_acceleration_covariance[7] = msg->linear_acceleration_covariance[7];
                 imu.linear_acceleration_covariance[8] = msg->linear_acceleration_covariance[8];
-                xloc->DispatchSensorData("imu", imu);
+                xloc->DispatchImu("imu", std::make_shared<const xloc::Imu>(std::move(imu)));
             }
         });
 
@@ -566,6 +649,10 @@ int main(int argc, char** argv)
     // Publishers: trajectory nodes, constraints
     ros::Publisher traj_node_pub = nh.advertise<visualization_msgs::MarkerArray>("xloc/trajectory_nodes", 10);
     ros::Publisher constraint_pub = nh.advertise<visualization_msgs::MarkerArray>("xloc/constraints", 10);
+    // Virtual Line Navigation markers (latched so RViz shows the static map
+    // immediately on subscribe; the sensor topic updates continuously).
+    ros::Publisher virtual_line_pub = nh.advertise<visualization_msgs::MarkerArray>("xloc/virtual_lines", 1, true);
+    ros::Publisher virtual_sensor_pub = nh.advertise<visualization_msgs::MarkerArray>("xloc/virtual_sensors", 10);
     ros::Publisher diagnostics_pub = nh.advertise<xloc_ros_wrapper::Diagnostics>("xloc/diagnostics", 10);
     ros::Publisher occupancy_pub = nh.advertise<nav_msgs::OccupancyGrid>("/map", 10, true);
     ros::Publisher pose_pub = nh.advertise<geometry_msgs::PoseStamped>("xloc/current_pose", 10);
@@ -575,7 +662,8 @@ int main(int argc, char** argv)
     // Start processing thread (pass broadcaster by reference)
     main_thread = std::thread(MainThread,
         std::ref(xloc), tf_buffer, std::ref(tf_broadcaster), std::ref(diagnostics_pub), std::ref(pose_pub));
-    pub_visualization_thread = std::thread(PubVisualizationThread, std::ref(xloc), std::ref(traj_node_pub), std::ref(constraint_pub));
+    pub_visualization_thread = std::thread(PubVisualizationThread, std::ref(xloc), std::ref(traj_node_pub), std::ref(constraint_pub),
+        std::ref(virtual_line_pub), std::ref(virtual_sensor_pub));
     pub_map_thread = std::thread(PubMapThread, std::ref(xloc), std::ref(occupancy_pub));
     ROS_INFO("xloc_ros_node ready");
     ros::spin();
